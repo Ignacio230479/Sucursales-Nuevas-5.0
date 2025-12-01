@@ -13,7 +13,6 @@ import {
   Calendar,
   User,
   Briefcase,
-  DollarSign,
   Zap,
   HardHat,
   Wifi,
