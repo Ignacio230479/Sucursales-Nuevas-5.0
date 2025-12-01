@@ -1,4 +1,3 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { 
   Search, 
   Plus, 
@@ -13,7 +12,6 @@ import {
   Calendar,
   User,
   Briefcase,
-  DollarSign,
   Zap,
   HardHat,
   Wifi,
