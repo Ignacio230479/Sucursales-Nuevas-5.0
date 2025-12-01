@@ -13,6 +13,7 @@ import {
   Calendar,
   User,
   Briefcase,
+  DollarSign,
   Zap,
   HardHat,
   Wifi,
@@ -113,8 +114,6 @@ const StatCard: React.FC<{ label: string; value: string | number; subValue?: str
 
 const cleanString = (str: string) => {
   if (!str) return "";
-  // First normalize to separate accents
-  // Then replace the accent characters
   return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
@@ -132,7 +131,15 @@ const compareIds = (idA: string, idB: string) => {
   return 0;
 };
 
-const parseCSVLine = (line: string): string[] => {
+// Robust CSV Parsing
+const detectDelimiter = (text: string): string => {
+  const firstLine = text.split('\n')[0];
+  const commas = (firstLine.match(/,/g) || []).length;
+  const semicolons = (firstLine.match(/;/g) || []).length;
+  return semicolons > commas ? ';' : ',';
+};
+
+const parseCSVLine = (line: string, delimiter: string): string[] => {
   const row: string[] = [];
   let currentVal = '';
   let inQuotes = false;
@@ -141,7 +148,7 @@ const parseCSVLine = (line: string): string[] => {
     const char = line[j];
     if (char === '"') {
       inQuotes = !inQuotes;
-    } else if (char === ',' && !inQuotes) {
+    } else if (char === delimiter && !inQuotes) {
       row.push(currentVal.trim().replace(/^"|"$/g, ''));
       currentVal = '';
     } else {
@@ -168,9 +175,10 @@ interface NewActivityModalProps {
   onClose: () => void;
   onSave: (activity: Activity) => void;
   existingCategories: string[];
+  activities: Activity[]; 
 }
 
-const NewActivityModal: React.FC<NewActivityModalProps> = ({ isOpen, onClose, onSave, existingCategories }) => {
+const NewActivityModal: React.FC<NewActivityModalProps> = ({ isOpen, onClose, onSave, existingCategories, activities }) => {
   const [formData, setFormData] = useState({
     id: '',
     category: '',
@@ -186,12 +194,13 @@ const NewActivityModal: React.FC<NewActivityModalProps> = ({ isOpen, onClose, on
   });
   const [isCustomCategory, setIsCustomCategory] = useState(false);
 
-  // Reset form when opening
+  // Initialize form
   useEffect(() => {
     if (isOpen) {
+      const defaultCategory = existingCategories.length > 0 ? existingCategories[0] : '';
       setFormData({
-        id: '',
-        category: existingCategories[0] || '',
+        id: '', // Will be calculated
+        category: defaultCategory,
         customCategory: '',
         name: '',
         provider: '',
@@ -206,6 +215,54 @@ const NewActivityModal: React.FC<NewActivityModalProps> = ({ isOpen, onClose, on
     }
   }, [isOpen, existingCategories]);
 
+  // Automatic ID Generation Logic
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const selectedCategory = isCustomCategory ? formData.customCategory : formData.category;
+    
+    // Safety check if no category selected yet
+    if (!selectedCategory) {
+       // Just find next global prefix if nothing selected? Better wait.
+       return;
+    }
+
+    const cleanSelectedCat = cleanString(selectedCategory).toLowerCase();
+
+    // 1. Find existing items in this category
+    const categoryItems = activities.filter(a => cleanString(a.category).toLowerCase() === cleanSelectedCat);
+
+    if (categoryItems.length > 0) {
+      // Logic for EXISTING category: Find max ID suffix and add 1
+      let maxSuffix = 0;
+      let prefix = categoryItems[0].id.split('.')[0]; 
+
+      categoryItems.forEach(item => {
+        const parts = item.id.split('.');
+        if (parts.length > 1) {
+           const suffix = parseInt(parts[1]);
+           if (!isNaN(suffix) && suffix > maxSuffix) maxSuffix = suffix;
+        }
+        if(parts[0]) prefix = parts[0];
+      });
+
+      setFormData(prev => ({ ...prev, id: `${prefix}.${maxSuffix + 1}` }));
+    } else {
+      // Logic for NEW category: Find max Prefix in whole system and add 1
+      let maxPrefix = 0;
+      activities.forEach(item => {
+        const parts = item.id.split('.');
+        const prefix = parseInt(parts[0]);
+        if (!isNaN(prefix) && prefix > maxPrefix) maxPrefix = prefix;
+      });
+      
+      const newPrefix = maxPrefix > 0 ? maxPrefix + 1 : 1;
+      setFormData(prev => ({ ...prev, id: `${newPrefix}.1` }));
+    }
+
+  }, [formData.category, formData.customCategory, isCustomCategory, activities, isOpen]);
+
+
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -213,7 +270,7 @@ const NewActivityModal: React.FC<NewActivityModalProps> = ({ isOpen, onClose, on
     const finalCategory = isCustomCategory ? formData.customCategory : formData.category;
     
     if (!formData.id || !formData.name || !finalCategory) {
-      alert('Por favor complete los campos obligatorios (ID, Categoria, Nombre)');
+      alert('Por favor complete los campos obligatorios (Nombre, Categoria)');
       return;
     }
 
@@ -289,14 +346,13 @@ const NewActivityModal: React.FC<NewActivityModalProps> = ({ isOpen, onClose, on
           </div>
 
           <div className="col-span-2 md:col-span-1">
-            <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">ID (ej. 10.1)</label>
+            <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase">ID (Automatico)</label>
             <input 
               type="text" 
-              className="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full p-2 border border-gray-200 bg-gray-100 rounded-lg text-sm text-gray-500 font-mono font-bold outline-none cursor-not-allowed"
               value={formData.id}
-              onChange={(e) => setFormData(prev => ({ ...prev, id: e.target.value }))}
-              placeholder="1.0"
-              required
+              readOnly
+              placeholder="Generado automaticamente..."
             />
           </div>
 
@@ -469,8 +525,6 @@ const ChatWidget = () => {
 
       const data = await response.json();
       
-      // Adapt based on webhook response structure (assuming { output: "text" } or { message: "text" } or just text)
-      // Usually n8n or generic webhooks return JSON. We'll try to find the text field.
       let botText = "Respuesta recibida";
       
       if (typeof data === 'string') {
@@ -614,7 +668,6 @@ export default function App() {
     const fetchData = async () => {
       try {
         const response = await fetch(GOOGLE_SHEET_CSV_URL);
-        // FORCE UTF-8 Decoding to handle characters like 'ó', 'ñ', etc. correctly
         const buffer = await response.arrayBuffer();
         const decoder = new TextDecoder('utf-8');
         const text = decoder.decode(buffer);
@@ -622,7 +675,8 @@ export default function App() {
         const lines = text.split(/\r\n|\n/);
         
         const newActivities: Activity[] = [];
-        
+        const delimiter = detectDelimiter(text); // Detect delimiter dynamically
+
         // Skip header if it exists
         const hasHeader = lines[0] && (lines[0].toLowerCase().includes('id') || lines[0].toLowerCase().includes('categoria'));
         const startIndex = hasHeader ? 1 : 0;
@@ -631,7 +685,7 @@ export default function App() {
           const line = lines[i];
           if (!line.trim()) continue;
 
-          const row = parseCSVLine(line);
+          const row = parseCSVLine(line, delimiter);
           if (row.length < 3) continue;
 
           const id = row[0];
@@ -658,7 +712,6 @@ export default function App() {
         }
 
         if (newActivities.length > 0) {
-          // Use dedup function to clean data from CSV + ensure no duplicates with initial state if any
           setActivities(deduplicateActivities(newActivities));
         }
       } catch (error) {
@@ -742,7 +795,6 @@ export default function App() {
   };
 
   const handleAddActivity = (newActivity: Activity) => {
-    // Add allows duplicates or updates? Let's strictly update if ID exists, or add.
     setActivities(prev => deduplicateActivities([...prev, newActivity]));
   };
 
@@ -761,8 +813,8 @@ export default function App() {
       try {
         const lines = text.split(/\r\n|\n/);
         const newActivities: Activity[] = [];
+        const delimiter = detectDelimiter(text);
         
-        // Smarter header detection: Check if first line looks like header (has 'id' or 'categoria')
         const hasHeader = lines[0] && (lines[0].toLowerCase().includes('id') || lines[0].toLowerCase().includes('categoria'));
         const startIndex = hasHeader ? 1 : 0;
         
@@ -770,7 +822,7 @@ export default function App() {
           const line = lines[i];
           if (!line.trim()) continue;
 
-          const row = parseCSVLine(line);
+          const row = parseCSVLine(line, delimiter);
           if (row.length < 3) continue;
 
           const id = row[0] || Math.random().toString(36).substr(2, 6);
@@ -805,7 +857,6 @@ export default function App() {
         alert('Hubo un error al procesar el archivo CSV.');
       }
       
-      // Reset input value to allow selecting the same file again if needed
       if (fileInputRef.current) fileInputRef.current.value = '';
     };
     reader.readAsText(file);
@@ -825,6 +876,7 @@ export default function App() {
         onClose={() => setIsModalOpen(false)}
         onSave={handleAddActivity}
         existingCategories={uniqueCategories}
+        activities={activities}
       />
 
       {/* Hidden File Input */}
@@ -984,7 +1036,7 @@ export default function App() {
                               </button>
                               <button 
                                 onClick={() => handleDelete(activity.id)}
-                                className="p-1 bg-red-500 text-white rounded hover:bg-red-600 transition-colors shadow-sm"
+                                className="p-1 bg-red-50 text-white rounded hover:bg-red-600 transition-colors shadow-sm"
                               >
                                 <Trash2 className="w-3 h-3" />
                               </button>
